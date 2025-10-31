@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gra Wyścigowa 3D</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            overflow: hidden;
+            font-family: 'Arial', sans-serif;
+        }
+        #gameCanvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        #hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            font-family: monospace;
+            z-index: 10;
+        }
+        #hud div {
+            font-size: 20px;
+            margin-bottom: 10px;
+        }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 14px;
+            z-index: 10;
+        }
+        #controls div {
+            margin-bottom: 5px;
+        }
+        #gameOver {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 20;
+        }
+        #gameOver.show {
+            display: flex;
+        }
+        #gameOverContent {
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            text-align: center;
+        }
+        #gameOverContent h2 {
+            color: #dc2626;
+            font-size: 36px;
+            margin-bottom: 20px;
+        }
+        #gameOverContent p {
+            font-size: 24px;
+            margin-bottom: 30px;
+        }
+        #restartBtn {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            font-size: 20px;
+            font-weight: bold;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        #restartBtn:hover {
+            background: #2563eb;
+        }
+    </style>
+</head>
+<body>
+    <div id="hud">
+        <div>Wynik: <span id="score">0</span></div>
+        <div>Prędkość: <span id="speed">0</span></div>
+    </div>
+    
+    <div id="controls">
+        <div>⬆️ Przyspiesz</div>
+        <div>⬇️ Hamuj</div>
+        <div>⬅️➡️ Steruj</div>
+    </div>
+
+    <div id="gameOver">
+        <div id="gameOverContent">
+            <h2>KONIEC GRY!</h2>
+            <p>Twój wynik: <span id="finalScore">0</span></p>
+            <button id="restartBtn">Zagraj ponownie</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <script>
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 10, 100);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 3, 8);
+        camera.lookAt(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(5, 10, 5);
+        scene.add(dirLight);
+
+        // Player car
+        const carGeometry = new THREE.BoxGeometry(0.8, 0.4, 1.6);
+        const carMaterial = new THREE.MeshPhongMaterial({ color: 0xff0000 });
+        const car = new THREE.Mesh(carGeometry, carMaterial);
+        car.position.y = 0.2;
+        scene.add(car);
+
+        // Road segments
+        const roadSegments = [];
+        const roadWidth = 8;
+        const segmentLength = 10;
+        const numSegments = 15;
+
+        for (let i = 0; i < numSegments; i++) {
+            const roadGeometry = new THREE.PlaneGeometry(roadWidth, segmentLength);
+            const roadMaterial = new THREE.MeshPhongMaterial({ 
+                color: i % 2 === 0 ? 0x333333 : 0x444444,
+                side: THREE.DoubleSide 
+            });
+            const road = new THREE.Mesh(roadGeometry, roadMaterial);
+            road.rotation.x = -Math.PI / 2;
+            road.position.z = -i * segmentLength;
+            scene.add(road);
+            roadSegments.push(road);
+        }
+
+        // Enemy cars
+        const enemyCars = [];
+        const playerWidth = 0.8;
+        const minGap = playerWidth * 1.1; // 110% szerokości gracza
+        const enemyCarWidth = 1.2;
+        const enemyCarGeometry = new THREE.BoxGeometry(enemyCarWidth, 0.6, 2.2);
+        
+        function createEnemyCarGroup(zPosition) {
+            const colors = [0x0000ff, 0x00ff00, 0xffff00, 0xff00ff, 0x00ffff];
+            const numCars = Math.floor(Math.random() * 2) + 1; // 1 lub 2 samochody
+            
+            const roadHalfWidth = roadWidth / 2;
+            const positions = [];
+            
+            if (numCars === 1) {
+                // Jeden samochód - losowa pozycja, ale nie blokująca całej drogi
+                const maxOffset = roadHalfWidth - enemyCarWidth / 2 - 0.5;
+                const xPos = (Math.random() - 0.5) * maxOffset * 2;
+                positions.push(xPos);
+            } else {
+                // Dwa samochody - muszą mieć lukę minimum 110% szerokości gracza
+                const availableSpace = roadWidth - 2 * enemyCarWidth - 1; // margines od krawędzi
+                const gapSize = minGap + Math.random() * 1; // luka od 110% do większej
+                
+                // Losuj pozycję pierwszego samochodu
+                const leftCarX = -roadHalfWidth + enemyCarWidth / 2 + 0.5 + Math.random() * (availableSpace - gapSize);
+                const rightCarX = leftCarX + enemyCarWidth / 2 + gapSize + enemyCarWidth / 2;
+                
+                positions.push(leftCarX, rightCarX);
+            }
+            
+            positions.forEach(xPos => {
+                const enemyCarMaterial = new THREE.MeshPhongMaterial({ 
+                    color: colors[Math.floor(Math.random() * colors.length)]
+                });
+                const enemyCar = new THREE.Mesh(enemyCarGeometry, enemyCarMaterial);
+                enemyCar.position.x = xPos;
+                enemyCar.position.y = 0.3;
+                enemyCar.position.z = zPosition;
+                enemyCar.userData = {
+                    speed: 0,
+                    counted: false
+                };
+                scene.add(enemyCar);
+                enemyCars.push(enemyCar);
+            });
+        }
+
+        // Create initial enemy car groups
+        for (let i = 0; i < 5; i++) {
+            createEnemyCarGroup(-40 - i * 20);
+        }
+
+        // Input handling
+        const keys = { left: false, right: false, up: false, down: false };
+        
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') keys.left = true;
+            if (e.key === 'ArrowRight') keys.right = true;
+            if (e.key === 'ArrowUp') keys.up = true;
+            if (e.key === 'ArrowDown') keys.down = true;
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'ArrowLeft') keys.left = false;
+            if (e.key === 'ArrowRight') keys.right = false;
+            if (e.key === 'ArrowUp') keys.up = false;
+            if (e.key === 'ArrowDown') keys.down = false;
+        });
+
+        // Game variables
+        let currentSpeed = 0;
+        let carX = 0;
+        let gameScore = 0;
+        let isGameOver = false;
+        let lastSpawnZ = -60; // Śledź pozycję ostatnio utworzonej grupy
+
+        // UI elements
+        const scoreElement = document.getElementById('score');
+        const speedElement = document.getElementById('speed');
+        const gameOverDiv = document.getElementById('gameOver');
+        const finalScoreElement = document.getElementById('finalScore');
+        const restartBtn = document.getElementById('restartBtn');
+
+        restartBtn.addEventListener('click', () => {
+            location.reload();
+        });
+
+        // Animation loop
+        function animate() {
+            if (isGameOver) return;
+
+            requestAnimationFrame(animate);
+
+            // Update speed
+            if (keys.up && currentSpeed < 1.5) {
+                currentSpeed += 0.02;
+            } else if (keys.down && currentSpeed > 0) {
+                currentSpeed -= 0.03;
+            } else if (currentSpeed > 0.3) {
+                currentSpeed -= 0.01;
+            }
+
+            // Update car position
+            if (keys.left && carX > -(roadWidth / 2 - 1)) {
+                carX -= 0.1;
+            }
+            if (keys.right && carX < (roadWidth / 2 - 1)) {
+                carX += 0.1;
+            }
+            car.position.x = carX;
+
+            // Move road
+            roadSegments.forEach((segment) => {
+                segment.position.z += currentSpeed;
+                if (segment.position.z > 10) {
+                    segment.position.z -= numSegments * segmentLength;
+                }
+            });
+
+            // Move and check enemy cars
+            for (let i = enemyCars.length - 1; i >= 0; i--) {
+                const enemyCar = enemyCars[i];
+                enemyCar.position.z += currentSpeed - enemyCar.userData.speed;
+                
+                // Collision detection - dokładniejsza detekcja box-to-box
+                const playerHalfWidth = playerWidth / 2;
+                const playerHalfLength = 1.6 / 2;
+                const enemyHalfWidth = enemyCarWidth / 2;
+                const enemyHalfLength = 2.2 / 2;
+                
+                const dx = Math.abs(car.position.x - enemyCar.position.x);
+                const dz = Math.abs(car.position.z - enemyCar.position.z);
+                
+                // Kolizja tylko gdy prostokąty się naprawdę nakładają
+                const collisionMargin = 0.1; // mały margines błędu
+                if (dx < (playerHalfWidth + enemyHalfWidth - collisionMargin) && 
+                    dz < (playerHalfLength + enemyHalfLength - collisionMargin)) {
+                    isGameOver = true;
+                    currentSpeed = 0;
+                    gameOverDiv.classList.add('show');
+                    finalScoreElement.textContent = Math.floor(gameScore);
+                }
+
+                // Check if player overtook enemy car
+                if (enemyCar.position.z > 2 && enemyCar.position.z < 3 && !enemyCar.userData.counted) {
+                    gameScore += 50;
+                    enemyCar.userData.counted = true;
+                }
+
+                // Reset enemy car position
+                if (enemyCar.position.z > 10) {
+                    // Usuń stary samochód ze sceny i pamięci
+                    scene.remove(enemyCar);
+                    enemyCar.geometry.dispose();
+                    enemyCar.material.dispose();
+                    enemyCars.splice(i, 1);
+                }
+            }
+
+            // Dodaj nowe grupy gdy potrzeba
+            if (enemyCars.length < 8) {
+                createEnemyCarGroup(-60 - Math.random() * 20);
+            }
+
+            // Update score
+            if (currentSpeed > 0) {
+                gameScore += currentSpeed * 0.1;
+            }
+
+            // Update UI
+            scoreElement.textContent = Math.floor(gameScore);
+            speedElement.textContent = Math.floor(currentSpeed * 100);
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
